@@ -27,7 +27,7 @@ int main(int argc, char **argv )
     cv::imwrite("im1.png",im1);
     AffineKLTParameters params;
     params.nlevels = 4;
-    params.windowSize = 11;
+    params.windowSize = 51;
     params.resolutionThresh = 0.001;
     AffineKLT klt( params );
 

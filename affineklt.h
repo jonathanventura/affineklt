@@ -25,6 +25,9 @@ class AffineKLT
 {
 protected:
     AffineKLTParameters params;
+    cv::Size windowSize;
+    int half_size;
+    cv::Mat weightsx, weightsy, weightsx2, weightsxy, weightsy2;
     void refine_tracks( const cv::Mat &image0, const std::vector<cv::Point2f> &points0,
                         const cv::Mat &image1, std::vector<cv::Point2f> &points1,
                         std::vector<cv::Matx22f> &affine );

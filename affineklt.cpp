@@ -8,7 +8,23 @@
 
 namespace affineklt {
     
-    AffineKLT::AffineKLT( const AffineKLTParameters &_params ) : params(_params) { }
+    AffineKLT::AffineKLT( const AffineKLTParameters &_params ) : params(_params)
+    {
+        // pre-compute window weights
+        windowSize = cv::Size(params.windowSize,params.windowSize);
+        half_size = (params.windowSize-1)/2;
+        weightsx = cv::Mat(windowSize,CV_32F);
+        for ( int i = 0; i < params.windowSize; i++ )
+            for ( int j = 0; j < params.windowSize; j++ )
+                weightsx.at<float>(i,j) = j-half_size;
+        weightsy = cv::Mat(windowSize,CV_32F);
+        for ( int i = 0; i < params.windowSize; i++ )
+            for ( int j = 0; j < params.windowSize; j++ )
+                weightsy.at<float>(i,j) = i-half_size;
+        weightsx2 = weightsx.mul(weightsx);
+        weightsxy = weightsx.mul(weightsy);
+        weightsy2 = weightsy.mul(weightsy);
+    }
     
     void buildPyramid( const cv::Mat &image, const int nlevels, std::vector<cv::Mat> &pyramid )
     {
@@ -38,6 +54,7 @@ namespace affineklt {
             affine[i](1,1) = 1;
         }
 
+        // initialize keypoints1
         keypoints1.resize(keypoints0.size());
         float scale = pow(2.f,-(params.nlevels-1));
         for ( int i = 0; i < keypoints0.size(); i++ )
@@ -45,6 +62,7 @@ namespace affineklt {
             keypoints1[i] = keypoints0[i]*scale;
         }
 
+        // iterate over pyramid
         std::vector<cv::Point2f> level_points0(keypoints0.size());
         for ( int l = params.nlevels-1; l >= 0; l-- )
         {
@@ -72,7 +90,6 @@ namespace affineklt {
                         const cv::Mat &image1, std::vector<cv::Point2f> &points1,
                         std::vector<cv::Matx22f> &affine )
     {
-        static int level = 0;
         // compute image derivatives
         cv::Mat Ix,Iy;
         cv::Scharr(image0,Ix,-1,1,0);
@@ -81,21 +98,8 @@ namespace affineklt {
         const cv::Mat IxIy = Ix.mul(Iy);
         const cv::Mat Iy2 = Iy.mul(Iy);
         
-        const cv::Size windowSize(params.windowSize,params.windowSize);
-        int half_size = (params.windowSize-1)/2;
-        cv::Mat weightsx(windowSize,CV_32F);
-        for ( int i = 0; i < params.windowSize; i++ )
-            for ( int j = 0; j < params.windowSize; j++ )
-                weightsx.at<float>(i,j) = j-half_size;
-        cv::Mat weightsy(windowSize,CV_32F);
-        for ( int i = 0; i < params.windowSize; i++ )
-            for ( int j = 0; j < params.windowSize; j++ )
-                weightsy.at<float>(i,j) = i-half_size;
-        cv::Mat weightsx2 = weightsx.mul(weightsx);
-        cv::Mat weightsxy = weightsx.mul(weightsy);
-        cv::Mat weightsy2 = weightsy.mul(weightsy);
-         
-        for ( int i = 0; i < points0.size(); i++ )
+        cv::parallel_for_(cv::Range(0, points0.size()), [&](const cv::Range& range){
+        for ( int i = range.start; i < range.end; i++ )
         {
             // get windows
             cv::Mat I, wIx, wIy, wIx2, wIxIy, wIy2;
@@ -106,12 +110,6 @@ namespace affineklt {
             cv::getRectSubPix(IxIy,windowSize,points0[i],wIxIy,CV_32F);
             cv::getRectSubPix(Iy2,windowSize,points0[i],wIy2,CV_32F);
 
-            //cv::Mat out;
-            //I.convertTo(out,CV_8U, 255.0);
-            //char filename[1024];
-            //sprintf(filename,"template_%d.png",level);
-            //cv::imwrite(filename,out);
-            
             // spatial gradient matrix
             cv::Matx<float,6,6> G;
             G(0,0) = cv::sum(wIx2)[0];
@@ -156,7 +154,6 @@ namespace affineklt {
             G(5,4) = G(4,5);
             G(5,5) = cv::sum(weightsy2.mul(wIy2))[0];
 
-            
             cv::SVD svdG(G);
         
             for ( int iter = 0; iter < params.maxIter; iter++ )
@@ -169,20 +166,12 @@ namespace affineklt {
                 M(1,0) = affine[i](1,0);
                 M(1,1) = affine[i](1,1);
                 M(1,2) = points1[i].y-half_size;
-                //std::cout << M << "\n";
                 cv::Mat J;
                 cv::warpAffine(image1,J,M,windowSize,cv::INTER_LINEAR|cv::WARP_INVERSE_MAP,cv::BORDER_REPLICATE);
-                //char filename[1024];
-                //sprintf(filename,"warp%d_%04d.png",level,iter);
-                //J.convertTo(out,CV_8U, 255.0);
-                //cv::imwrite(filename,out);
-                //std::cout << affine[i] << "\n";
-                //std::cout << points1[i] << "\n";
                 
                 // calculate difference
                 cv::Mat diff;
                 cv::subtract(I,J,diff,cv::noArray(),CV_32F);
-                //std::cout << "level " << level << " iter " << iter << ": " << sqrtf(cv::sum(diff.mul(diff))[0]) << "\n";
                 
                 // calculate image mismatch vector
                 cv::Matx<float,6,1> b;
@@ -208,14 +197,12 @@ namespace affineklt {
                 Aupdate(1,0) = update(4,0);
                 Aupdate(1,1) = 1+update(5,0);
                 affine[i] = affine[i] * Aupdate;
-                 
-                //std::cout << "update: " << update(0,0) << " " << update(1,0) << "\n";
                 
                 // check convergence
                 if ( update(0,0)*update(0,0)+update(1,0)*update(1,0) < params.resolutionThresh*params.resolutionThresh ) break;
             }
         }
-        level++;
+        }); // end of parallel for
     }
 
 }
